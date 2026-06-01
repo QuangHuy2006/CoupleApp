@@ -8,11 +8,11 @@ const createCode = async (req, res) => {
         const coupleId = uuidv4();
         
         await pool.query(
-            'INSERT INTO couple_pairs (id, code, user1_id, status) VALUES (?, ?, ?, ?)',
+            'INSERT INTO couple_pairs (id, code, user1_id, status) VALUES ($1, $2, $3, $4)',
             [coupleId, pairCode, req.user.id, 'pending']
         );
         
-        await pool.query('UPDATE users SET pair_code = ? WHERE id = ?', [pairCode, req.user.id]);
+        await pool.query('UPDATE users SET pair_code = $1 WHERE id = $2', [pairCode, req.user.id]);
         
         res.json({ success: true, code: pairCode });
     } catch (error) {
@@ -26,8 +26,8 @@ const pairWithCode = async (req, res) => {
         const pool = getPool();
         
         // Tìm cặp đôi theo code
-        const [coupleRows] = await pool.query(
-            'SELECT id, user1_id FROM couple_pairs WHERE code = ? AND status = "pending" AND user2_id IS NULL',
+        const { rows: coupleRows } = await pool.query(
+            "SELECT id, user1_id FROM couple_pairs WHERE code = $1 AND status = 'pending' AND user2_id IS NULL",
             [code]
         );
         
@@ -39,33 +39,33 @@ const pairWithCode = async (req, res) => {
         
         // Cập nhật cặp đôi
         await pool.query(
-            'UPDATE couple_pairs SET user2_id = ?, status = "active", paired_at = NOW() WHERE id = ?',
+            "UPDATE couple_pairs SET user2_id = $1, status = 'active', paired_at = NOW() WHERE id = $2",
             [req.user.id, couple.id]
         );
         
         // Lấy tên user1
-        const [user1Rows] = await pool.query('SELECT full_name FROM users WHERE id = ?', [couple.user1_id]);
+        const { rows: user1Rows } = await pool.query('SELECT full_name FROM users WHERE id = $1', [couple.user1_id]);
         const user1Name = user1Rows[0].full_name;
         
         // Cập nhật user2
         await pool.query(
-            'UPDATE users SET is_paired = TRUE, partner_id = ?, partner_name = ?, pair_code = NULL WHERE id = ?',
+            'UPDATE users SET is_paired = TRUE, partner_id = $1, partner_name = $2, pair_code = NULL WHERE id = $3',
             [couple.user1_id, user1Name, req.user.id]
         );
         
         // Lấy tên user2
-        const [user2Rows] = await pool.query('SELECT full_name FROM users WHERE id = ?', [req.user.id]);
+        const { rows: user2Rows } = await pool.query('SELECT full_name FROM users WHERE id = $1', [req.user.id]);
         const user2Name = user2Rows[0].full_name;
         
         // Cập nhật user1
         await pool.query(
-            'UPDATE users SET is_paired = TRUE, partner_id = ?, partner_name = ?, pair_code = NULL WHERE id = ?',
+            'UPDATE users SET is_paired = TRUE, partner_id = $1, partner_name = $2, pair_code = NULL WHERE id = $3',
             [req.user.id, user2Name, couple.user1_id]
         );
         
         // Return updated user data
-        const [updatedUserRows] = await pool.query(
-            'SELECT id, email, full_name, is_paired, partner_id, partner_name FROM users WHERE id = ?',
+        const { rows: updatedUserRows } = await pool.query(
+            'SELECT id, email, full_name, is_paired, partner_id, partner_name FROM users WHERE id = $1',
             [req.user.id]
         );
         
@@ -85,8 +85,8 @@ const getCoupleInfo = async (req, res) => {
         let coupleInfo = {};
         
         if (req.user.is_paired && req.user.partner_id) {
-            const [partnerRows] = await pool.query(
-                'SELECT full_name, email, avatar FROM users WHERE id = ?',
+            const { rows: partnerRows } = await pool.query(
+                'SELECT full_name, email, avatar FROM users WHERE id = $1',
                 [req.user.partner_id]
             );
             

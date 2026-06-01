@@ -1,26 +1,25 @@
-const mysql = require('mysql2/promise');
+const { Pool } = require('pg');
 require('dotenv').config();
 
 let pool = null;
 
 const connectDB = async () => {
     try {
-        // Kết nối trực tiếp (database đã tạo bởi init-database.sql)
-        pool = await mysql.createPool({
-            host: process.env.DB_HOST,
-            port: process.env.DB_PORT,
-            user: process.env.DB_USER,
-            password: process.env.DB_PASSWORD,
-            database: process.env.DB_NAME,
-            waitForConnections: true,
-            connectionLimit: 10,
-            queueLimit: 0
+        pool = new Pool({
+            connectionString: process.env.DATABASE_URL,
+            ssl: {
+                rejectUnauthorized: false
+            }
         });
         
-        console.log('✅ MySQL kết nối thành công (cổng 3306)');
+        // Test connection
+        const client = await pool.connect();
+        client.release();
+        
+        console.log('✅ PostgreSQL (Supabase) kết nối thành công');
         return pool;
     } catch (error) {
-        console.error('❌ Lỗi kết nối MySQL:', error.message);
+        console.error('❌ Lỗi kết nối PostgreSQL:', error.message);
         process.exit(1);
     }
 };

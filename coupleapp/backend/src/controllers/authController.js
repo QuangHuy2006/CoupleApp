@@ -21,8 +21,8 @@ const generateUniqueUserCode = async (pool) => {
             tempCode += numbers.charAt(Math.floor(Math.random() * numbers.length));
         }
         
-        // Check if code already exists - snake_case
-        const [existing] = await pool.query('SELECT user_code FROM users WHERE user_code = ?', [tempCode]);
+        // Check if code already exists
+        const { rows: existing } = await pool.query('SELECT user_code FROM users WHERE user_code = $1', [tempCode]);
         if (existing.length === 0) {
             code = tempCode;
             isUnique = true;
@@ -38,7 +38,7 @@ const register = async (req, res) => {
         const pool = getPool();
         
         // Kiểm tra email tồn tại
-        const [existing] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+        const { rows: existing } = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
         if (existing.length > 0) {
             return res.status(400).json({ success: false, message: 'Email đã được đăng ký' });
         }
@@ -51,9 +51,9 @@ const register = async (req, res) => {
         // Generate unique user code
         const userCode = await generateUniqueUserCode(pool);
         
-        // Tạo user - snake_case
+        // Tạo user
         await pool.query(
-            'INSERT INTO users (id, email, password, full_name, user_code, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
+            'INSERT INTO users (id, email, password, full_name, user_code, created_at) VALUES ($1, $2, $3, $4, $5, NOW())',
             [userId, email, hashedPassword, full_name, userCode]
         );
         
@@ -85,7 +85,7 @@ const login = async (req, res) => {
         const { email, password } = req.body;
         const pool = getPool();
         
-        const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+        const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         
         if (rows.length === 0) {
             return res.status(401).json({ success: false, message: 'Email hoặc mật khẩu không đúng' });

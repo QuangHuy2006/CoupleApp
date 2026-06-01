@@ -6,9 +6,9 @@ const updateAnniversary = async (req, res) => {
         const pool = getPool();
         
         // Find couple by user
-        const [coupleRows] = await pool.query(
-            'SELECT id, user1_id, user2_id FROM couple_pairs WHERE (user1_id = ? OR user2_id = ?) AND status = "active"',
-            [req.user.id, req.user.id]
+        const { rows: coupleRows } = await pool.query(
+            "SELECT id, user1_id, user2_id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
+            [req.user.id]
         );
         
         if (coupleRows.length === 0) {
@@ -17,7 +17,7 @@ const updateAnniversary = async (req, res) => {
         const couple = coupleRows[0];
         
         // Update both users' anniversary_date
-        await pool.query('UPDATE users SET anniversary_date = ? WHERE id IN (?, ?)', [date, couple.user1_id, couple.user2_id]);
+        await pool.query('UPDATE users SET anniversary_date = $1 WHERE id = $2 OR id = $3', [date, couple.user1_id, couple.user2_id]);
         
         res.json({ success: true, message: 'Cập nhật ngày kỷ niệm thành công', date });
     } catch (error) {

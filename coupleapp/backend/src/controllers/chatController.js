@@ -5,10 +5,9 @@ const getMessages = async (req, res) => {
     try {
         const pool = getPool();
         
-        // Lấy couple_id từ user (nếu user là user1 hoặc user2)
-        const [coupleRows] = await pool.query(
-            'SELECT id FROM couple_pairs WHERE (user1_id = ? OR user2_id = ?) AND status = "active"',
-            [req.user.id, req.user.id]
+        const { rows: coupleRows } = await pool.query(
+            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
+            [req.user.id]
         );
         
         if (coupleRows.length === 0) {
@@ -17,12 +16,11 @@ const getMessages = async (req, res) => {
         
         const coupleId = coupleRows[0].id;
         
-        // Lấy danh sách tin nhắn
-        const [messages] = await pool.query(
+        const { rows: messages } = await pool.query(
             `SELECT m.id, m.sender_id, m.message, m.type, m.media_url, m.created_at, u.full_name 
              FROM messages m 
              JOIN users u ON m.sender_id = u.id 
-             WHERE m.couple_id = ? 
+             WHERE m.couple_id = $1 
              ORDER BY m.created_at ASC 
              LIMIT 100`,
             [coupleId]
@@ -43,10 +41,9 @@ const sendMessage = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Tin nhắn không được trống' });
         }
         
-        // Lấy couple_id
-        const [coupleRows] = await pool.query(
-            'SELECT id FROM couple_pairs WHERE (user1_id = ? OR user2_id = ?) AND status = "active"',
-            [req.user.id, req.user.id]
+        const { rows: coupleRows } = await pool.query(
+            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
+            [req.user.id]
         );
         
         if (coupleRows.length === 0) {
@@ -56,9 +53,8 @@ const sendMessage = async (req, res) => {
         const coupleId = coupleRows[0].id;
         const messageId = uuidv4();
         
-        // Lưu tin nhắn vào DB
         await pool.query(
-            'INSERT INTO messages (id, couple_id, sender_id, message, type, media_url) VALUES (?, ?, ?, ?, ?, ?)',
+            'INSERT INTO messages (id, couple_id, sender_id, message, type, media_url) VALUES ($1, $2, $3, $4, $5, $6)',
             [messageId, coupleId, req.user.id, message || null, type, media_url]
         );
         
@@ -85,10 +81,9 @@ const getUnreadCount = async (req, res) => {
         const pool = getPool();
         const userId = req.user.id;
 
-        // Find active couple
-        const [coupleRows] = await pool.query(
-            'SELECT id FROM couple_pairs WHERE (user1_id = ? OR user2_id = ?) AND status = "active"',
-            [userId, userId]
+        const { rows: coupleRows } = await pool.query(
+            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
+            [userId]
         );
 
         if (coupleRows.length === 0) {
@@ -97,13 +92,12 @@ const getUnreadCount = async (req, res) => {
 
         const coupleId = coupleRows[0].id;
 
-        // Count unread messages from partner
-        const [countRows] = await pool.query(
-            'SELECT COUNT(*) as count FROM messages WHERE couple_id = ? AND sender_id != ? AND is_read = 0',
+        const { rows: countRows } = await pool.query(
+            'SELECT COUNT(*) as count FROM messages WHERE couple_id = $1 AND sender_id != $2 AND is_read = false',
             [coupleId, userId]
         );
 
-        res.json({ success: true, count: countRows[0].count });
+        res.json({ success: true, count: parseInt(countRows[0].count) });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -114,10 +108,9 @@ const markAsRead = async (req, res) => {
         const pool = getPool();
         const userId = req.user.id;
 
-        // Find active couple
-        const [coupleRows] = await pool.query(
-            'SELECT id FROM couple_pairs WHERE (user1_id = ? OR user2_id = ?) AND status = "active"',
-            [userId, userId]
+        const { rows: coupleRows } = await pool.query(
+            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
+            [userId]
         );
 
         if (coupleRows.length === 0) {
@@ -126,9 +119,8 @@ const markAsRead = async (req, res) => {
 
         const coupleId = coupleRows[0].id;
 
-        // Mark partner's messages as read
         await pool.query(
-            'UPDATE messages SET is_read = 1 WHERE couple_id = ? AND sender_id != ? AND is_read = 0',
+            'UPDATE messages SET is_read = true WHERE couple_id = $1 AND sender_id != $2 AND is_read = false',
             [coupleId, userId]
         );
 
@@ -144,11 +136,30 @@ const uploadMedia = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Không có file được tải lên' });
         }
         
-        const url = `/photos/${req.file.filename}`;
+        // Upload to Supabase Storage
+        const { createClient } = require('@supabase/supabase-js');
+        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+        
+        const fileName = `chat/${Date.now()}-${Math.round(Math.random() * 1E9)}${require('path').extname(req.file.originalname || '.jpg')}`;
+        
+        const { data, error } = await supabase.storage
+            .from('photos')
+            .upload(fileName, req.file.buffer, {
+                contentType: req.file.mimetype,
+                upsert: false
+            });
+        
+        if (error) {
+            console.error('Supabase storage error:', error);
+            return res.status(500).json({ success: false, message: 'Lỗi upload file: ' + error.message });
+        }
+        
+        // Get public URL
+        const { data: urlData } = supabase.storage.from('photos').getPublicUrl(fileName);
         
         res.json({
             success: true,
-            url,
+            url: urlData.publicUrl,
             message: 'Tải lên thành công'
         });
     } catch (error) {

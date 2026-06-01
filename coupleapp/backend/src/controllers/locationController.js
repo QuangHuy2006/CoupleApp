@@ -47,27 +47,27 @@ const updateLocation = async (req, res) => {
 
         // Update current location in users table
         await pool.query(
-            'UPDATE users SET latitude = ?, longitude = ? WHERE id = ?',
+            'UPDATE users SET latitude = $1, longitude = $2 WHERE id = $3',
             [latitude, longitude, userId]
         );
 
-        // Save location history
+        // Save location history - upsert using ON CONFLICT
         const locationId = uuidv4();
         await pool.query(
-            'INSERT INTO user_locations (id, user_id, latitude, longitude) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE latitude = ?, longitude = ?, updated_at = CURRENT_TIMESTAMP',
-            [locationId, userId, latitude, longitude, latitude, longitude]
+            'INSERT INTO user_locations (id, user_id, latitude, longitude) VALUES ($1, $2, $3, $4)',
+            [locationId, userId, latitude, longitude]
         );
 
         // Get partner info if paired
         let partnerLocation = null;
-        const [userRows] = await pool.query(
-            'SELECT is_paired, partner_id FROM users WHERE id = ?',
+        const { rows: userRows } = await pool.query(
+            'SELECT is_paired, partner_id FROM users WHERE id = $1',
             [userId]
         );
 
         if (userRows[0].is_paired && userRows[0].partner_id) {
-            const [partnerRows] = await pool.query(
-                'SELECT latitude, longitude FROM users WHERE id = ?',
+            const { rows: partnerRows } = await pool.query(
+                'SELECT latitude, longitude FROM users WHERE id = $1',
                 [userRows[0].partner_id]
             );
 
@@ -112,8 +112,8 @@ const getPartnerLocation = async (req, res) => {
         const pool = getPool();
 
         // Get user's partner
-        const [userRows] = await pool.query(
-            'SELECT is_paired, partner_id FROM users WHERE id = ?',
+        const { rows: userRows } = await pool.query(
+            'SELECT is_paired, partner_id FROM users WHERE id = $1',
             [userId]
         );
 
@@ -127,8 +127,8 @@ const getPartnerLocation = async (req, res) => {
 
         // Get partner location
         const partnerId = userRows[0].partner_id;
-        const [partnerRows] = await pool.query(
-            'SELECT id, latitude, longitude FROM users WHERE id = ?',
+        const { rows: partnerRows } = await pool.query(
+            'SELECT id, latitude, longitude FROM users WHERE id = $1',
             [partnerId]
         );
 
@@ -141,8 +141,8 @@ const getPartnerLocation = async (req, res) => {
         }
 
         // Get current user location
-        const [currentUserRows] = await pool.query(
-            'SELECT latitude, longitude FROM users WHERE id = ?',
+        const { rows: currentUserRows } = await pool.query(
+            'SELECT latitude, longitude FROM users WHERE id = $1',
             [userId]
         );
 
@@ -164,8 +164,8 @@ const getPartnerLocation = async (req, res) => {
         }
 
         // Get last update time
-        const [locationHistory] = await pool.query(
-            'SELECT updated_at FROM user_locations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1',
+        const { rows: locationHistory } = await pool.query(
+            'SELECT updated_at FROM user_locations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1',
             [partnerId]
         );
 
@@ -191,10 +191,10 @@ const getLocationHistory = async (req, res) => {
         const pool = getPool();
 
         // Get location history for specified days
-        const [locations] = await pool.query(
+        const { rows: locations } = await pool.query(
             `SELECT id, latitude, longitude, updated_at 
              FROM user_locations 
-             WHERE user_id = ? AND updated_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+             WHERE user_id = $1 AND updated_at >= NOW() - INTERVAL '1 day' * $2
              ORDER BY updated_at DESC
              LIMIT 100`,
             [userId, parseInt(days)]
@@ -214,7 +214,7 @@ const deleteLocationHistory = async (req, res) => {
         const userId = req.user.id;
         const pool = getPool();
 
-        await pool.query('DELETE FROM user_locations WHERE user_id = ?', [userId]);
+        await pool.query('DELETE FROM user_locations WHERE user_id = $1', [userId]);
 
         res.json({ success: true, message: 'Lịch sử vị trí đã được xóa' });
     } catch (error) {

@@ -6,9 +6,9 @@ const getProfile = async (req, res) => {
         const userId = req.user.id;
 
         // Get user profile with photos
-        const [userRows] = await pool.query(
+        const { rows: userRows } = await pool.query(
             `SELECT id, email, full_name, phone_number, cccd, user_code, profile_complete, 
-                    avatar, is_paired, partner_id, partner_name FROM users WHERE id = ?`,
+                    avatar, is_paired, partner_id, partner_name FROM users WHERE id = $1`,
             [userId]
         );
 
@@ -17,8 +17,8 @@ const getProfile = async (req, res) => {
         }
 
         // Get user photos
-        const [photos] = await pool.query(
-            'SELECT id, photo_path, is_primary FROM user_photos WHERE user_id = ? ORDER BY is_primary DESC',
+        const { rows: photos } = await pool.query(
+            'SELECT id, photo_path, is_primary FROM user_photos WHERE user_id = $1 ORDER BY is_primary DESC',
             [userId]
         );
 
@@ -58,8 +58,8 @@ const updateProfile = async (req, res) => {
 
         // Check if CCCD already exists
         if (cccd) {
-            const [existingCCCD] = await pool.query(
-                'SELECT id FROM users WHERE cccd = ? AND id != ?',
+            const { rows: existingCCCD } = await pool.query(
+                'SELECT id FROM users WHERE cccd = $1 AND id != $2',
                 [cccd, userId]
             );
             if (existingCCCD.length > 0) {
@@ -76,26 +76,26 @@ const updateProfile = async (req, res) => {
 
         // Update profile
         await pool.query(
-            'UPDATE users SET full_name = ?, phone_number = ?, cccd = ? WHERE id = ?',
+            'UPDATE users SET full_name = $1, phone_number = $2, cccd = $3 WHERE id = $4',
             [full_name || req.user.full_name, finalPhone, finalCCCD, userId]
         );
 
         // Check if profile is complete (has phone, cccd, and 3+ photos)
-        const [photos] = await pool.query(
-            'SELECT COUNT(*) as count FROM user_photos WHERE user_id = ?',
+        const { rows: photoCountRows } = await pool.query(
+            'SELECT COUNT(*) as count FROM user_photos WHERE user_id = $1',
             [userId]
         );
 
-        const profileComplete = phone_number && cccd && photos[0].count >= 3;
+        const profileComplete = phone_number && cccd && parseInt(photoCountRows[0].count) >= 3;
         
         if (profileComplete) {
-            await pool.query('UPDATE users SET profile_complete = TRUE WHERE id = ?', [userId]);
+            await pool.query('UPDATE users SET profile_complete = TRUE WHERE id = $1', [userId]);
         }
 
         // Get updated user
-        const [rows] = await pool.query(
+        const { rows } = await pool.query(
             `SELECT id, email, full_name, phone_number, cccd, user_code, profile_complete, 
-                    avatar, is_paired, partner_id, partner_name FROM users WHERE id = ?`,
+                    avatar, is_paired, partner_id, partner_name FROM users WHERE id = $1`,
             [userId]
         );
 
@@ -114,18 +114,18 @@ const getProfileCompletion = async (req, res) => {
         const userId = req.user.id;
         const pool = getPool();
 
-        const [userRows] = await pool.query(
-            'SELECT phone_number, cccd FROM users WHERE id = ?',
+        const { rows: userRows } = await pool.query(
+            'SELECT phone_number, cccd FROM users WHERE id = $1',
             [userId]
         );
 
-        const [photoRows] = await pool.query(
-            'SELECT COUNT(*) as count FROM user_photos WHERE user_id = ?',
+        const { rows: photoRows } = await pool.query(
+            'SELECT COUNT(*) as count FROM user_photos WHERE user_id = $1',
             [userId]
         );
 
         const user = userRows[0];
-        const photoCount = photoRows[0].count;
+        const photoCount = parseInt(photoRows[0].count);
 
         const completion = {
             hasPhone: !!user.phone_number,
@@ -148,8 +148,6 @@ const getProfileCompletion = async (req, res) => {
 
 const uploadAvatar = async (req, res) => {
     try {
-        const fs = require('fs');
-        const path = require('path');
         const pool = getPool();
         const userId = req.user.id;
 
@@ -157,31 +155,44 @@ const uploadAvatar = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Vui lòng chọn một ảnh đại diện' });
         }
 
-        const PHOTO_UPLOAD_DIR = path.join(__dirname, '../../public/photos');
-        if (!fs.existsSync(PHOTO_UPLOAD_DIR)) {
-            fs.mkdirSync(PHOTO_UPLOAD_DIR, { recursive: true });
-        }
-
-        // Generate filename
-        const timestamp = Date.now();
-        const fileName = `avatar_${userId}_${timestamp}.jpg`;
-        const filePath = path.join(PHOTO_UPLOAD_DIR, fileName);
+        const { createClient } = require('@supabase/supabase-js');
+        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
         // Delete old avatar if exists
-        const [userRows] = await pool.query('SELECT avatar FROM users WHERE id = ?', [userId]);
+        const { rows: userRows } = await pool.query('SELECT avatar FROM users WHERE id = $1', [userId]);
         if (userRows.length > 0 && userRows[0].avatar) {
-            const oldAvatarPath = path.join(__dirname, '../../public', userRows[0].avatar);
-            if (fs.existsSync(oldAvatarPath)) {
-                fs.unlinkSync(oldAvatarPath);
+            try {
+                const url = userRows[0].avatar;
+                const pathMatch = url.match(/\/photos\/(.+)$/);
+                if (pathMatch) {
+                    await supabase.storage.from('photos').remove([pathMatch[1]]);
+                }
+            } catch (err) {
+                console.error('Error deleting old avatar:', err.message);
             }
         }
 
-        // Save new file
-        fs.writeFileSync(filePath, req.file.buffer);
-        const photoPath = `/photos/${fileName}`;
+        // Upload new avatar to Supabase Storage
+        const timestamp = Date.now();
+        const fileName = `avatars/avatar_${userId}_${timestamp}.jpg`;
+
+        const { error: uploadError } = await supabase.storage
+            .from('photos')
+            .upload(fileName, req.file.buffer, {
+                contentType: req.file.mimetype,
+                upsert: false
+            });
+
+        if (uploadError) {
+            return res.status(500).json({ success: false, message: 'Lỗi upload ảnh: ' + uploadError.message });
+        }
+
+        // Get public URL
+        const { data: urlData } = supabase.storage.from('photos').getPublicUrl(fileName);
+        const photoPath = urlData.publicUrl;
 
         // Update DB
-        await pool.query('UPDATE users SET avatar = ? WHERE id = ?', [photoPath, userId]);
+        await pool.query('UPDATE users SET avatar = $1 WHERE id = $2', [photoPath, userId]);
 
         res.json({
             success: true,

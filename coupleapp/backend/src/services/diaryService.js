@@ -6,7 +6,7 @@ const createDiary = async (coupleId, userId, title, content, images, location) =
     const pool = getPool();
     
     await pool.query(
-        'INSERT INTO diaries (id, couple_id, user_id, title, content, images, location) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO diaries (id, couple_id, user_id, title, content, images, location) VALUES ($1, $2, $3, $4, $5, $6, $7)',
         [diaryId, coupleId, userId, title, content, JSON.stringify(images || []), location]
     );
     
@@ -16,11 +16,11 @@ const createDiary = async (coupleId, userId, title, content, images, location) =
 const getDiaries = async (coupleId) => {
     const pool = getPool();
     
-    const [diaries] = await pool.query(
+    const { rows: diaries } = await pool.query(
         `SELECT d.id, d.title, d.content, d.images, d.location, d.created_at, u.full_name as author_name
          FROM diaries d
          JOIN users u ON d.user_id = u.id
-         WHERE d.couple_id = ?
+         WHERE d.couple_id = $1
          ORDER BY d.created_at DESC`,
         [coupleId]
     );
@@ -37,11 +37,11 @@ const getDiaries = async (coupleId) => {
 const getDiaryDetail = async (diaryId) => {
     const pool = getPool();
     
-    const [diaries] = await pool.query(
+    const { rows: diaries } = await pool.query(
         `SELECT d.id, d.title, d.content, d.images, d.location, d.created_at, u.full_name as author_name
          FROM diaries d
          JOIN users u ON d.user_id = u.id
-         WHERE d.id = ?`,
+         WHERE d.id = $1`,
         [diaryId]
     );
     
@@ -56,12 +56,12 @@ const deleteDiary = async (diaryId, userId) => {
     const pool = getPool();
     
     // Verify user owns the diary
-    const [diaries] = await pool.query('SELECT user_id FROM diaries WHERE id = ?', [diaryId]);
+    const { rows: diaries } = await pool.query('SELECT user_id FROM diaries WHERE id = $1', [diaryId]);
     
     if (diaries.length === 0) return { error: 'Không tìm thấy nhật ký' };
     if (diaries[0].user_id !== userId) return { error: 'Không có quyền xóa' };
     
-    await pool.query('DELETE FROM diaries WHERE id = ?', [diaryId]);
+    await pool.query('DELETE FROM diaries WHERE id = $1', [diaryId]);
     return { success: true };
 };
 

@@ -18,10 +18,10 @@ const protect = async (req, res, next) => {
         // Verify token
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         
-        // Lấy user từ database - snake_case columns
+        // Lấy user từ database
         const pool = getPool();
-        const [rows] = await pool.query(
-            'SELECT id, email, full_name, user_code, profile_complete, phone_number, cccd, is_paired, partner_name, partner_id, avatar, latitude, longitude FROM users WHERE id = ?',
+        const { rows } = await pool.query(
+            'SELECT id, email, full_name, user_code, profile_complete, phone_number, cccd, is_paired, partner_name, partner_id, avatar, latitude, longitude FROM users WHERE id = $1',
             [decoded.id]
         );
         

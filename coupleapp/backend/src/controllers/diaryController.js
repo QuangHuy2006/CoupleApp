@@ -7,9 +7,9 @@ const createDiary = async (req, res) => {
         const pool = getPool();
         
         // Lấy couple_id
-        const [coupleRows] = await pool.query(
-            'SELECT id FROM couple_pairs WHERE (user1_id = ? OR user2_id = ?) AND status = "active"',
-            [req.user.id, req.user.id]
+        const { rows: coupleRows } = await pool.query(
+            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
+            [req.user.id]
         );
         
         if (coupleRows.length === 0) {
@@ -29,9 +29,9 @@ const getDiaries = async (req, res) => {
         const pool = getPool();
         
         // Lấy couple_id
-        const [coupleRows] = await pool.query(
-            'SELECT id FROM couple_pairs WHERE (user1_id = ? OR user2_id = ?) AND status = "active"',
-            [req.user.id, req.user.id]
+        const { rows: coupleRows } = await pool.query(
+            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
+            [req.user.id]
         );
         
         if (coupleRows.length === 0) {

@@ -47,13 +47,13 @@ const initSocket = (server) => {
                 
                 // Lưu vào DB
                 await pool.query(
-                    'INSERT INTO messages (id, couple_id, sender_id, message, type, media_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    'INSERT INTO messages (id, couple_id, sender_id, message, type, media_url, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
                     [messageId, coupleId, socket.userId, message || null, type, media_url, timestamp]
                 );
                 
                 // Lấy thông tin user gửi
-                const [userRows] = await pool.query(
-                    'SELECT full_name FROM users WHERE id = ?',
+                const { rows: userRows } = await pool.query(
+                    'SELECT full_name FROM users WHERE id = $1',
                     [socket.userId]
                 );
                 const senderName = userRows[0]?.full_name || 'Bạn';
@@ -113,7 +113,7 @@ const initSocket = (server) => {
         socket.on('call_user', (data) => {
             const { partnerId, signalData, from, callerName, type, room } = data;
             if (partnerId && userSockets[partnerId]) {
-                socket.join(room); // Người gọi join vào room
+                socket.join(room);
                 io.to(userSockets[partnerId]).emit('incoming_call', {
                     signal: signalData,
                     from,
@@ -127,7 +127,7 @@ const initSocket = (server) => {
         // Trả lời cuộc gọi
         socket.on('answer_call', (data) => {
             const { signal, room, to } = data;
-            socket.join(room); // Người nhận join vào room
+            socket.join(room);
             if (to && userSockets[to]) {
                 io.to(userSockets[to]).emit('call_answered', { signal });
             }
@@ -145,10 +145,8 @@ const initSocket = (server) => {
         socket.on('ice_candidate', (data) => {
             const { candidate, room, to } = data;
             if (room) {
-                // Nếu có room thì gửi cho tất cả người khác trong room
                 socket.to(room).emit('ice_candidate', { candidate });
             } else if (to && userSockets[to]) {
-                // Fallback nếu không có room (ví dụ trước khi join xong)
                 io.to(userSockets[to]).emit('ice_candidate', { candidate });
             }
         });
@@ -158,7 +156,6 @@ const initSocket = (server) => {
             const { room } = data;
             if (room) {
                 socket.to(room).emit('call_ended');
-                // Có thể rời khỏi phòng ở đây
                 socket.leave(room);
             }
         });
