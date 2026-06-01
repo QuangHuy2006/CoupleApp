@@ -39,24 +39,35 @@ const initSocket = (server) => {
         socket.on('send_message', async (data) => {
             try {
                 const { message, type = 'text', media_url = null, coupleId, partnerId } = data;
-                const pool = getPool();
+                const supabase = getPool();
                 const { v4: uuidv4 } = require('uuid');
                 
                 const messageId = uuidv4();
                 const timestamp = new Date();
                 
                 // Lưu vào DB
-                await pool.query(
-                    'INSERT INTO messages (id, couple_id, sender_id, message, type, media_url, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-                    [messageId, coupleId, socket.userId, message || null, type, media_url, timestamp]
-                );
+                const { error: insertError } = await supabase
+                    .from('messages')
+                    .insert([{
+                        id: messageId,
+                        couple_id: coupleId,
+                        sender_id: socket.userId,
+                        message: message || null,
+                        type,
+                        media_url,
+                        created_at: timestamp.toISOString()
+                    }]);
+                    
+                if (insertError) throw insertError;
                 
                 // Lấy thông tin user gửi
-                const { rows: userRows } = await pool.query(
-                    'SELECT full_name FROM users WHERE id = $1',
-                    [socket.userId]
-                );
-                const senderName = userRows[0]?.full_name || 'Bạn';
+                const { data: userRows, error: userError } = await supabase
+                    .from('users')
+                    .select('full_name')
+                    .eq('id', socket.userId);
+                    
+                if (userError) throw userError;
+                const senderName = userRows?.[0]?.full_name || 'Bạn';
                 
                 // Gửi tin nhắn cho partner
                 if (partnerId && userSockets[partnerId]) {

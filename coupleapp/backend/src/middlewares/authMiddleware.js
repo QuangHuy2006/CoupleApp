@@ -19,13 +19,13 @@ const protect = async (req, res, next) => {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         
         // Lấy user từ database
-        const pool = getPool();
-        const { rows } = await pool.query(
-            'SELECT id, email, full_name, user_code, profile_complete, phone_number, cccd, is_paired, partner_name, partner_id, avatar, latitude, longitude FROM users WHERE id = $1',
-            [decoded.id]
-        );
-        
-        if (rows.length === 0) {
+        const supabase = getPool();
+        const { data: rows, error } = await supabase
+            .from('users')
+            .select('id, email, full_name, user_code, profile_complete, phone_number, cccd, is_paired, partner_name, partner_id, avatar, latitude, longitude')
+            .eq('id', decoded.id);
+            
+        if (error || !rows || rows.length === 0) {
             return res.status(401).json({ success: false, message: 'User không tồn tại' });
         }
         

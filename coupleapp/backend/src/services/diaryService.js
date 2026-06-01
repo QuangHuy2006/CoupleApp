@@ -3,65 +3,100 @@ const { v4: uuidv4 } = require('uuid');
 
 const createDiary = async (coupleId, userId, title, content, images, location) => {
     const diaryId = uuidv4();
-    const pool = getPool();
+    const supabase = getPool();
     
-    await pool.query(
-        'INSERT INTO diaries (id, couple_id, user_id, title, content, images, location) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [diaryId, coupleId, userId, title, content, JSON.stringify(images || []), location]
-    );
+    const { error: insertError } = await supabase
+        .from('diaries')
+        .insert([{
+            id: diaryId,
+            couple_id: coupleId,
+            user_id: userId,
+            title,
+            content,
+            images: images || [],
+            location
+        }]);
+        
+    if (insertError) throw insertError;
     
     return { id: diaryId, message: 'Tạo nhật ký thành công' };
 };
 
 const getDiaries = async (coupleId) => {
-    const pool = getPool();
+    const supabase = getPool();
     
-    const { rows: diaries } = await pool.query(
-        `SELECT d.id, d.title, d.content, d.images, d.location, d.created_at, u.full_name as author_name
-         FROM diaries d
-         JOIN users u ON d.user_id = u.id
-         WHERE d.couple_id = $1
-         ORDER BY d.created_at DESC`,
-        [coupleId]
-    );
+    const { data: diaries, error: fetchError } = await supabase
+        .from('diaries')
+        .select(`
+            id, title, content, images, location, created_at,
+            users!inner(full_name)
+        `)
+        .eq('couple_id', coupleId)
+        .order('created_at', { ascending: false });
+        
+    if (fetchError) throw fetchError;
     
-    // Parse images JSON
     const parsedDiaries = diaries.map(d => ({
-        ...d,
-        images: d.images ? JSON.parse(d.images) : []
+        id: d.id,
+        title: d.title,
+        content: d.content,
+        images: Array.isArray(d.images) ? d.images : (d.images ? JSON.parse(d.images) : []),
+        location: d.location,
+        created_at: d.created_at,
+        author_name: d.users?.full_name
     }));
     
     return { diaries: parsedDiaries };
 };
 
 const getDiaryDetail = async (diaryId) => {
-    const pool = getPool();
+    const supabase = getPool();
     
-    const { rows: diaries } = await pool.query(
-        `SELECT d.id, d.title, d.content, d.images, d.location, d.created_at, u.full_name as author_name
-         FROM diaries d
-         JOIN users u ON d.user_id = u.id
-         WHERE d.id = $1`,
-        [diaryId]
-    );
+    const { data: diaries, error: fetchError } = await supabase
+        .from('diaries')
+        .select(`
+            id, title, content, images, location, created_at,
+            users!inner(full_name)
+        `)
+        .eq('id', diaryId);
+        
+    if (fetchError) throw fetchError;
     
-    if (diaries.length === 0) return null;
+    if (!diaries || diaries.length === 0) return null;
     
-    const diary = diaries[0];
-    diary.images = diary.images ? JSON.parse(diary.images) : [];
-    return diary;
+    const d = diaries[0];
+    return {
+        id: d.id,
+        title: d.title,
+        content: d.content,
+        images: Array.isArray(d.images) ? d.images : (d.images ? JSON.parse(d.images) : []),
+        location: d.location,
+        created_at: d.created_at,
+        author_name: d.users?.full_name
+    };
 };
 
 const deleteDiary = async (diaryId, userId) => {
-    const pool = getPool();
+    const supabase = getPool();
     
     // Verify user owns the diary
-    const { rows: diaries } = await pool.query('SELECT user_id FROM diaries WHERE id = $1', [diaryId]);
+    const { data: diaries, error: checkError } = await supabase
+        .from('diaries')
+        .select('user_id')
+        .eq('id', diaryId);
+        
+    if (checkError) throw checkError;
     
-    if (diaries.length === 0) return { error: 'Không tìm thấy nhật ký' };
+    if (!diaries || diaries.length === 0) return { error: 'Không tìm thấy nhật ký' };
     if (diaries[0].user_id !== userId) return { error: 'Không có quyền xóa' };
     
-    await pool.query('DELETE FROM diaries WHERE id = $1', [diaryId]);
+    const { error: deleteError } = await supabase
+        .from('diaries')
+        .delete()
+        .eq('id', diaryId);
+        
+    if (deleteError) throw deleteError;
+    
     return { success: true };
 };
 

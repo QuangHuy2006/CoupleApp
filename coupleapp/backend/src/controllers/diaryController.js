@@ -4,15 +4,18 @@ const { getPool } = require('../config/database');
 const createDiary = async (req, res) => {
     try {
         const { title, content, images, location } = req.body;
-        const pool = getPool();
+        const supabase = getPool();
         
         // Lấy couple_id
-        const { rows: coupleRows } = await pool.query(
-            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
-            [req.user.id]
-        );
+        const { data: coupleRows, error: coupleError } = await supabase
+            .from('couple_pairs')
+            .select('id')
+            .or(`user1_id.eq.${req.user.id},user2_id.eq.${req.user.id}`)
+            .eq('status', 'active');
+            
+        if (coupleError) throw coupleError;
         
-        if (coupleRows.length === 0) {
+        if (!coupleRows || coupleRows.length === 0) {
             return res.status(400).json({ success: false, message: 'Không tìm thấy cặp đôi' });
         }
         
@@ -26,15 +29,18 @@ const createDiary = async (req, res) => {
 
 const getDiaries = async (req, res) => {
     try {
-        const pool = getPool();
+        const supabase = getPool();
         
         // Lấy couple_id
-        const { rows: coupleRows } = await pool.query(
-            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
-            [req.user.id]
-        );
+        const { data: coupleRows, error: coupleError } = await supabase
+            .from('couple_pairs')
+            .select('id')
+            .or(`user1_id.eq.${req.user.id},user2_id.eq.${req.user.id}`)
+            .eq('status', 'active');
+            
+        if (coupleError) throw coupleError;
         
-        if (coupleRows.length === 0) {
+        if (!coupleRows || coupleRows.length === 0) {
             return res.status(400).json({ success: false, message: 'Không tìm thấy cặp đôi' });
         }
         

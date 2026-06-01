@@ -1,34 +1,31 @@
-const { Pool } = require('pg');
+const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
-let pool = null;
+let supabase = null;
 
 const connectDB = async () => {
     try {
-        pool = new Pool({
-            connectionString: process.env.DATABASE_URL,
-            ssl: {
-                rejectUnauthorized: false
-            }
-        });
+        if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
+            throw new Error('Thiếu cấu hình SUPABASE_URL hoặc SUPABASE_KEY');
+        }
+
+        supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
         
-        // Test connection
-        const client = await pool.connect();
-        client.release();
-        
-        console.log('✅ PostgreSQL (Supabase) kết nối thành công');
-        return pool;
+        console.log('✅ Kết nối Supabase thành công');
+        return supabase;
     } catch (error) {
-        console.error('❌ Lỗi kết nối PostgreSQL:', error.message);
+        console.error('❌ Lỗi cấu hình Supabase:', error.message);
         process.exit(1);
     }
 };
 
 const getPool = () => {
-    if (!pool) {
-        throw new Error('Database chưa được kết nối');
+    if (!supabase) {
+        throw new Error('Supabase chưa được khởi tạo');
     }
-    return pool;
+    return supabase;
 };
 
+// Vẫn giữ tên hàm getPool để giảm lỗi khi import ở các file khác,
+// nhưng thực chất nó trả về supabase client.
 module.exports = { connectDB, getPool };

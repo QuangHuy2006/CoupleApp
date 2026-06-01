@@ -3,16 +3,27 @@ const { getPool } = require('../config/database');
 
 const createCode = async (req, res) => {
     try {
-        const pool = getPool();
+        const supabase = getPool();
         const pairCode = Math.random().toString(36).substring(2, 10).toUpperCase();
         const coupleId = uuidv4();
         
-        await pool.query(
-            'INSERT INTO couple_pairs (id, code, user1_id, status) VALUES ($1, $2, $3, $4)',
-            [coupleId, pairCode, req.user.id, 'pending']
-        );
+        const { error: insertError } = await supabase
+            .from('couple_pairs')
+            .insert([{
+                id: coupleId,
+                code: pairCode,
+                user1_id: req.user.id,
+                status: 'pending'
+            }]);
+            
+        if (insertError) throw insertError;
         
-        await pool.query('UPDATE users SET pair_code = $1 WHERE id = $2', [pairCode, req.user.id]);
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ pair_code: pairCode })
+            .eq('id', req.user.id);
+            
+        if (updateError) throw updateError;
         
         res.json({ success: true, code: pairCode });
     } catch (error) {
@@ -23,51 +34,87 @@ const createCode = async (req, res) => {
 const pairWithCode = async (req, res) => {
     try {
         const { code } = req.body;
-        const pool = getPool();
+        const supabase = getPool();
         
         // Tìm cặp đôi theo code
-        const { rows: coupleRows } = await pool.query(
-            "SELECT id, user1_id FROM couple_pairs WHERE code = $1 AND status = 'pending' AND user2_id IS NULL",
-            [code]
-        );
+        const { data: coupleRows, error: findError } = await supabase
+            .from('couple_pairs')
+            .select('id, user1_id')
+            .eq('code', code)
+            .eq('status', 'pending')
+            .is('user2_id', null);
+            
+        if (findError) throw findError;
         
-        if (coupleRows.length === 0) {
+        if (!coupleRows || coupleRows.length === 0) {
             return res.status(400).json({ success: false, message: 'Mã kết đôi không hợp lệ' });
         }
         
         const couple = coupleRows[0];
         
         // Cập nhật cặp đôi
-        await pool.query(
-            "UPDATE couple_pairs SET user2_id = $1, status = 'active', paired_at = NOW() WHERE id = $2",
-            [req.user.id, couple.id]
-        );
+        const { error: updateCoupleError } = await supabase
+            .from('couple_pairs')
+            .update({
+                user2_id: req.user.id,
+                status: 'active',
+                paired_at: new Date().toISOString()
+            })
+            .eq('id', couple.id);
+            
+        if (updateCoupleError) throw updateCoupleError;
         
         // Lấy tên user1
-        const { rows: user1Rows } = await pool.query('SELECT full_name FROM users WHERE id = $1', [couple.user1_id]);
+        const { data: user1Rows, error: err1 } = await supabase
+            .from('users')
+            .select('full_name')
+            .eq('id', couple.user1_id);
+            
+        if (err1) throw err1;
         const user1Name = user1Rows[0].full_name;
         
-        // Cập nhật user2
-        await pool.query(
-            'UPDATE users SET is_paired = TRUE, partner_id = $1, partner_name = $2, pair_code = NULL WHERE id = $3',
-            [couple.user1_id, user1Name, req.user.id]
-        );
+        // Cập nhật user2 (current user)
+        const { error: updateU2Error } = await supabase
+            .from('users')
+            .update({
+                is_paired: true,
+                partner_id: couple.user1_id,
+                partner_name: user1Name,
+                pair_code: null
+            })
+            .eq('id', req.user.id);
+            
+        if (updateU2Error) throw updateU2Error;
         
         // Lấy tên user2
-        const { rows: user2Rows } = await pool.query('SELECT full_name FROM users WHERE id = $1', [req.user.id]);
+        const { data: user2Rows, error: err2 } = await supabase
+            .from('users')
+            .select('full_name')
+            .eq('id', req.user.id);
+            
+        if (err2) throw err2;
         const user2Name = user2Rows[0].full_name;
         
         // Cập nhật user1
-        await pool.query(
-            'UPDATE users SET is_paired = TRUE, partner_id = $1, partner_name = $2, pair_code = NULL WHERE id = $3',
-            [req.user.id, user2Name, couple.user1_id]
-        );
+        const { error: updateU1Error } = await supabase
+            .from('users')
+            .update({
+                is_paired: true,
+                partner_id: req.user.id,
+                partner_name: user2Name,
+                pair_code: null
+            })
+            .eq('id', couple.user1_id);
+            
+        if (updateU1Error) throw updateU1Error;
         
         // Return updated user data
-        const { rows: updatedUserRows } = await pool.query(
-            'SELECT id, email, full_name, is_paired, partner_id, partner_name FROM users WHERE id = $1',
-            [req.user.id]
-        );
+        const { data: updatedUserRows, error: err3 } = await supabase
+            .from('users')
+            .select('id, email, full_name, is_paired, partner_id, partner_name')
+            .eq('id', req.user.id);
+            
+        if (err3) throw err3;
         
         res.json({ 
             success: true, 
@@ -81,16 +128,18 @@ const pairWithCode = async (req, res) => {
 
 const getCoupleInfo = async (req, res) => {
     try {
-        const pool = getPool();
+        const supabase = getPool();
         let coupleInfo = {};
         
         if (req.user.is_paired && req.user.partner_id) {
-            const { rows: partnerRows } = await pool.query(
-                'SELECT full_name, email, avatar FROM users WHERE id = $1',
-                [req.user.partner_id]
-            );
+            const { data: partnerRows, error } = await supabase
+                .from('users')
+                .select('full_name, email, avatar')
+                .eq('id', req.user.partner_id);
+                
+            if (error) throw error;
             
-            if (partnerRows.length > 0) {
+            if (partnerRows && partnerRows.length > 0) {
                 coupleInfo.partner = partnerRows[0];
             }
         }

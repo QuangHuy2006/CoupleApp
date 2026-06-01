@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const { getPool } = require('../config/database');
 
 // Function to generate unique user code (fixed, non-random)
-const generateUniqueUserCode = async (pool) => {
+const generateUniqueUserCode = async (supabase) => {
     let code;
     let isUnique = false;
     
@@ -22,8 +22,14 @@ const generateUniqueUserCode = async (pool) => {
         }
         
         // Check if code already exists
-        const { rows: existing } = await pool.query('SELECT user_code FROM users WHERE user_code = $1', [tempCode]);
-        if (existing.length === 0) {
+        const { data: existing, error } = await supabase
+            .from('users')
+            .select('user_code')
+            .eq('user_code', tempCode);
+            
+        if (error) throw error;
+        
+        if (!existing || existing.length === 0) {
             code = tempCode;
             isUnique = true;
         }
@@ -35,11 +41,17 @@ const generateUniqueUserCode = async (pool) => {
 const register = async (req, res) => {
     try {
         const { email, password, full_name } = req.body;
-        const pool = getPool();
+        const supabase = getPool();
         
         // Kiểm tra email tồn tại
-        const { rows: existing } = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-        if (existing.length > 0) {
+        const { data: existing, error: checkError } = await supabase
+            .from('users')
+            .select('id')
+            .eq('email', email);
+            
+        if (checkError) throw checkError;
+        
+        if (existing && existing.length > 0) {
             return res.status(400).json({ success: false, message: 'Email đã được đăng ký' });
         }
         
@@ -49,13 +61,20 @@ const register = async (req, res) => {
         const userId = uuidv4();
         
         // Generate unique user code
-        const userCode = await generateUniqueUserCode(pool);
+        const userCode = await generateUniqueUserCode(supabase);
         
         // Tạo user
-        await pool.query(
-            'INSERT INTO users (id, email, password, full_name, user_code, created_at) VALUES ($1, $2, $3, $4, $5, NOW())',
-            [userId, email, hashedPassword, full_name, userCode]
-        );
+        const { error: insertError } = await supabase
+            .from('users')
+            .insert([{
+                id: userId,
+                email,
+                password: hashedPassword,
+                full_name,
+                user_code: userCode
+            }]);
+            
+        if (insertError) throw insertError;
         
         // Tạo token
         const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '30d' });
@@ -83,11 +102,16 @@ const register = async (req, res) => {
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
-        const pool = getPool();
+        const supabase = getPool();
         
-        const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        const { data: rows, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('email', email);
+            
+        if (error) throw error;
         
-        if (rows.length === 0) {
+        if (!rows || rows.length === 0) {
             return res.status(401).json({ success: false, message: 'Email hoặc mật khẩu không đúng' });
         }
         

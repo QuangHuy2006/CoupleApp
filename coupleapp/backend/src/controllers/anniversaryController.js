@@ -3,21 +3,29 @@ const { getPool } = require('../config/database');
 const updateAnniversary = async (req, res) => {
     try {
         const { date } = req.body; // expected format: YYYY-MM-DD
-        const pool = getPool();
+        const supabase = getPool();
         
         // Find couple by user
-        const { rows: coupleRows } = await pool.query(
-            "SELECT id, user1_id, user2_id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
-            [req.user.id]
-        );
+        const { data: coupleRows, error: findError } = await supabase
+            .from('couple_pairs')
+            .select('id, user1_id, user2_id')
+            .or(`user1_id.eq.${req.user.id},user2_id.eq.${req.user.id}`)
+            .eq('status', 'active');
+            
+        if (findError) throw findError;
         
-        if (coupleRows.length === 0) {
+        if (!coupleRows || coupleRows.length === 0) {
             return res.status(400).json({ success: false, message: 'Không tìm thấy cặp đôi' });
         }
         const couple = coupleRows[0];
         
         // Update both users' anniversary_date
-        await pool.query('UPDATE users SET anniversary_date = $1 WHERE id = $2 OR id = $3', [date, couple.user1_id, couple.user2_id]);
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ anniversary_date: date })
+            .in('id', [couple.user1_id, couple.user2_id]);
+            
+        if (updateError) throw updateError;
         
         res.json({ success: true, message: 'Cập nhật ngày kỷ niệm thành công', date });
     } catch (error) {

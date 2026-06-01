@@ -1,30 +1,49 @@
 const { v4: uuidv4 } = require('uuid');
 const { getPool } = require('../config/database');
+const path = require('path');
 
 const getMessages = async (req, res) => {
     try {
-        const pool = getPool();
+        const supabase = getPool();
         
-        const { rows: coupleRows } = await pool.query(
-            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
-            [req.user.id]
-        );
+        // Find active couple
+        const { data: coupleRows, error: coupleError } = await supabase
+            .from('couple_pairs')
+            .select('id')
+            .or(`user1_id.eq.${req.user.id},user2_id.eq.${req.user.id}`)
+            .eq('status', 'active');
+            
+        if (coupleError) throw coupleError;
         
-        if (coupleRows.length === 0) {
+        if (!coupleRows || coupleRows.length === 0) {
             return res.status(400).json({ success: false, message: 'Không tìm thấy cặp đôi' });
         }
         
         const coupleId = coupleRows[0].id;
         
-        const { rows: messages } = await pool.query(
-            `SELECT m.id, m.sender_id, m.message, m.type, m.media_url, m.created_at, u.full_name 
-             FROM messages m 
-             JOIN users u ON m.sender_id = u.id 
-             WHERE m.couple_id = $1 
-             ORDER BY m.created_at ASC 
-             LIMIT 100`,
-            [coupleId]
-        );
+        // Supabase join syntax: select('id, sender_id, message, type, media_url, created_at, users!inner(full_name)')
+        const { data: messagesData, error: msgError } = await supabase
+            .from('messages')
+            .select(`
+                id, sender_id, message, type, media_url, created_at,
+                users!inner ( full_name )
+            `)
+            .eq('couple_id', coupleId)
+            .order('created_at', { ascending: true })
+            .limit(100);
+            
+        if (msgError) throw msgError;
+        
+        // Flatten the users join
+        const messages = messagesData.map(m => ({
+            id: m.id,
+            sender_id: m.sender_id,
+            message: m.message,
+            type: m.type,
+            media_url: m.media_url,
+            created_at: m.created_at,
+            full_name: m.users.full_name
+        }));
         
         res.json({ success: true, messages, coupleId });
     } catch (error) {
@@ -35,28 +54,39 @@ const getMessages = async (req, res) => {
 const sendMessage = async (req, res) => {
     try {
         const { message, type = 'text', media_url = null } = req.body;
-        const pool = getPool();
+        const supabase = getPool();
         
         if ((!message || message.trim() === '') && !media_url) {
             return res.status(400).json({ success: false, message: 'Tin nhắn không được trống' });
         }
         
-        const { rows: coupleRows } = await pool.query(
-            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
-            [req.user.id]
-        );
+        const { data: coupleRows, error: coupleError } = await supabase
+            .from('couple_pairs')
+            .select('id')
+            .or(`user1_id.eq.${req.user.id},user2_id.eq.${req.user.id}`)
+            .eq('status', 'active');
+            
+        if (coupleError) throw coupleError;
         
-        if (coupleRows.length === 0) {
+        if (!coupleRows || coupleRows.length === 0) {
             return res.status(400).json({ success: false, message: 'Không tìm thấy cặp đôi' });
         }
         
         const coupleId = coupleRows[0].id;
         const messageId = uuidv4();
         
-        await pool.query(
-            'INSERT INTO messages (id, couple_id, sender_id, message, type, media_url) VALUES ($1, $2, $3, $4, $5, $6)',
-            [messageId, coupleId, req.user.id, message || null, type, media_url]
-        );
+        const { error: insertError } = await supabase
+            .from('messages')
+            .insert([{
+                id: messageId,
+                couple_id: coupleId,
+                sender_id: req.user.id,
+                message: message || null,
+                type,
+                media_url
+            }]);
+            
+        if (insertError) throw insertError;
         
         res.json({ 
             success: true, 
@@ -78,26 +108,33 @@ const sendMessage = async (req, res) => {
 
 const getUnreadCount = async (req, res) => {
     try {
-        const pool = getPool();
+        const supabase = getPool();
         const userId = req.user.id;
 
-        const { rows: coupleRows } = await pool.query(
-            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
-            [userId]
-        );
+        const { data: coupleRows, error: coupleError } = await supabase
+            .from('couple_pairs')
+            .select('id')
+            .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+            .eq('status', 'active');
 
-        if (coupleRows.length === 0) {
+        if (coupleError) throw coupleError;
+
+        if (!coupleRows || coupleRows.length === 0) {
             return res.json({ success: true, count: 0 });
         }
 
         const coupleId = coupleRows[0].id;
 
-        const { rows: countRows } = await pool.query(
-            'SELECT COUNT(*) as count FROM messages WHERE couple_id = $1 AND sender_id != $2 AND is_read = false',
-            [coupleId, userId]
-        );
+        const { count, error: countError } = await supabase
+            .from('messages')
+            .select('*', { count: 'exact', head: true })
+            .eq('couple_id', coupleId)
+            .neq('sender_id', userId)
+            .eq('is_read', false);
+            
+        if (countError) throw countError;
 
-        res.json({ success: true, count: parseInt(countRows[0].count) });
+        res.json({ success: true, count: count || 0 });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -105,24 +142,31 @@ const getUnreadCount = async (req, res) => {
 
 const markAsRead = async (req, res) => {
     try {
-        const pool = getPool();
+        const supabase = getPool();
         const userId = req.user.id;
 
-        const { rows: coupleRows } = await pool.query(
-            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
-            [userId]
-        );
+        const { data: coupleRows, error: coupleError } = await supabase
+            .from('couple_pairs')
+            .select('id')
+            .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+            .eq('status', 'active');
 
-        if (coupleRows.length === 0) {
+        if (coupleError) throw coupleError;
+
+        if (!coupleRows || coupleRows.length === 0) {
             return res.json({ success: true });
         }
 
         const coupleId = coupleRows[0].id;
 
-        await pool.query(
-            'UPDATE messages SET is_read = true WHERE couple_id = $1 AND sender_id != $2 AND is_read = false',
-            [coupleId, userId]
-        );
+        const { error: updateError } = await supabase
+            .from('messages')
+            .update({ is_read: true })
+            .eq('couple_id', coupleId)
+            .neq('sender_id', userId)
+            .eq('is_read', false);
+            
+        if (updateError) throw updateError;
 
         res.json({ success: true, message: 'Đã đánh dấu đọc tin nhắn' });
     } catch (error) {
@@ -136,11 +180,10 @@ const uploadMedia = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Không có file được tải lên' });
         }
         
-        // Upload to Supabase Storage
-        const { createClient } = require('@supabase/supabase-js');
-        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+        // Supabase storage
+        const supabase = getPool();
         
-        const fileName = `chat/${Date.now()}-${Math.round(Math.random() * 1E9)}${require('path').extname(req.file.originalname || '.jpg')}`;
+        const fileName = `chat/${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(req.file.originalname || '.jpg')}`;
         
         const { data, error } = await supabase.storage
             .from('photos')

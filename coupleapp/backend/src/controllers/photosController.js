@@ -3,7 +3,7 @@ const { getPool } = require('../config/database');
 
 const uploadPhotos = async (req, res) => {
     try {
-        const pool = getPool();
+        const supabase = getPool();
         const userId = req.user.id;
         
         // Check if files exist
@@ -28,29 +28,35 @@ const uploadPhotos = async (req, res) => {
             });
         }
 
-        const { createClient } = require('@supabase/supabase-js');
-        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-
         const uploadedPhotos = [];
         const photoIds = [];
 
         // Delete old photos from Supabase Storage
-        const { rows: oldPhotos } = await pool.query('SELECT id, photo_path FROM user_photos WHERE user_id = $1', [userId]);
-        for (const photo of oldPhotos) {
-            try {
-                // Extract file path from URL for Supabase deletion
-                const url = photo.photo_path;
-                const pathMatch = url.match(/\/photos\/(.+)$/);
-                if (pathMatch) {
-                    await supabase.storage.from('photos').remove([pathMatch[1]]);
+        const { data: oldPhotos, error: oldPhotosError } = await supabase
+            .from('user_photos')
+            .select('id, photo_path')
+            .eq('user_id', userId);
+
+        if (!oldPhotosError && oldPhotos) {
+            for (const photo of oldPhotos) {
+                try {
+                    // Extract file path from URL for Supabase deletion
+                    const url = photo.photo_path;
+                    const pathMatch = url.match(/\/photos\/(.+)$/);
+                    if (pathMatch) {
+                        await supabase.storage.from('photos').remove([pathMatch[1]]);
+                    }
+                } catch (err) {
+                    console.error(`Error deleting photo from storage: ${err.message}`);
                 }
-            } catch (err) {
-                console.error(`Error deleting photo from storage: ${err.message}`);
             }
         }
 
         // Delete old photo records
-        await pool.query('DELETE FROM user_photos WHERE user_id = $1', [userId]);
+        await supabase
+            .from('user_photos')
+            .delete()
+            .eq('user_id', userId);
 
         // Save new photos
         for (let i = 0; i < req.files.length; i++) {
@@ -77,10 +83,14 @@ const uploadPhotos = async (req, res) => {
             const photoPath = urlData.publicUrl;
 
             // Save to database
-            await pool.query(
-                'INSERT INTO user_photos (id, user_id, photo_path, is_primary) VALUES ($1, $2, $3, $4)',
-                [photoId, userId, photoPath, i === 0]
-            );
+            await supabase
+                .from('user_photos')
+                .insert([{
+                    id: photoId,
+                    user_id: userId,
+                    photo_path: photoPath,
+                    is_primary: i === 0
+                }]);
 
             photoIds.push(photoId);
             uploadedPhotos.push({
@@ -90,11 +100,19 @@ const uploadPhotos = async (req, res) => {
             });
         }
 
-        // Update profile_complete if this is the first upload with 3+ photos
-        await pool.query(
-            'UPDATE users SET profile_complete = TRUE WHERE id = $1 AND phone_number IS NOT NULL AND cccd IS NOT NULL',
-            [userId]
-        );
+        // Update profile_complete if phone_number and cccd are not null
+        const { data: userRow } = await supabase
+            .from('users')
+            .select('phone_number, cccd')
+            .eq('id', userId)
+            .single();
+
+        if (userRow && userRow.phone_number && userRow.cccd) {
+            await supabase
+                .from('users')
+                .update({ profile_complete: true })
+                .eq('id', userId);
+        }
 
         res.json({
             success: true,
@@ -109,13 +127,17 @@ const uploadPhotos = async (req, res) => {
 
 const getPhotos = async (req, res) => {
     try {
-        const pool = getPool();
+        const supabase = getPool();
         const { userId } = req.params;
 
-        const { rows: photos } = await pool.query(
-            'SELECT id, photo_path, is_primary, created_at FROM user_photos WHERE user_id = $1 ORDER BY is_primary DESC, created_at ASC',
-            [userId]
-        );
+        const { data: photos, error } = await supabase
+            .from('user_photos')
+            .select('id, photo_path, is_primary, created_at')
+            .eq('user_id', userId)
+            .order('is_primary', { ascending: false })
+            .order('created_at', { ascending: true });
+
+        if (error) throw error;
 
         res.json({
             success: true,
@@ -128,17 +150,20 @@ const getPhotos = async (req, res) => {
 
 const deletePhoto = async (req, res) => {
     try {
-        const pool = getPool();
+        const supabase = getPool();
         const { photoId } = req.params;
         const userId = req.user.id;
 
         // Get photo info
-        const { rows: photos } = await pool.query(
-            'SELECT id, photo_path FROM user_photos WHERE id = $1 AND user_id = $2',
-            [photoId, userId]
-        );
+        const { data: photos, error: findError } = await supabase
+            .from('user_photos')
+            .select('id, photo_path')
+            .eq('id', photoId)
+            .eq('user_id', userId);
 
-        if (photos.length === 0) {
+        if (findError) throw findError;
+
+        if (!photos || photos.length === 0) {
             return res.status(404).json({ success: false, message: 'Ảnh không tìm thấy' });
         }
 
@@ -149,8 +174,6 @@ const deletePhoto = async (req, res) => {
             const url = photo.photo_path;
             const pathMatch = url.match(/\/photos\/(.+)$/);
             if (pathMatch) {
-                const { createClient } = require('@supabase/supabase-js');
-                const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
                 await supabase.storage.from('photos').remove([pathMatch[1]]);
             }
         } catch (err) {
@@ -158,16 +181,22 @@ const deletePhoto = async (req, res) => {
         }
 
         // Delete from database
-        await pool.query('DELETE FROM user_photos WHERE id = $1', [photoId]);
+        await supabase
+            .from('user_photos')
+            .delete()
+            .eq('id', photoId);
 
         // Check remaining photos
-        const { rows: remainingPhotos } = await pool.query(
-            'SELECT COUNT(*) as count FROM user_photos WHERE user_id = $1',
-            [userId]
-        );
+        const { count, error: countError } = await supabase
+            .from('user_photos')
+            .select('*', { count: 'exact', head: true })
+            .eq('user_id', userId);
 
-        if (parseInt(remainingPhotos[0].count) < 3) {
-            await pool.query('UPDATE users SET profile_complete = FALSE WHERE id = $1', [userId]);
+        if (!countError && count < 3) {
+            await supabase
+                .from('users')
+                .update({ profile_complete: false })
+                .eq('id', userId);
         }
 
         res.json({ success: true, message: 'Ảnh đã được xóa' });
@@ -178,25 +207,34 @@ const deletePhoto = async (req, res) => {
 
 const setPrimaryPhoto = async (req, res) => {
     try {
-        const pool = getPool();
+        const supabase = getPool();
         const { photoId } = req.params;
         const userId = req.user.id;
 
         // Verify photo belongs to user
-        const { rows: photos } = await pool.query(
-            'SELECT id FROM user_photos WHERE id = $1 AND user_id = $2',
-            [photoId, userId]
-        );
+        const { data: photos, error: findError } = await supabase
+            .from('user_photos')
+            .select('id')
+            .eq('id', photoId)
+            .eq('user_id', userId);
 
-        if (photos.length === 0) {
+        if (findError) throw findError;
+
+        if (!photos || photos.length === 0) {
             return res.status(404).json({ success: false, message: 'Ảnh không tìm thấy' });
         }
 
         // Remove primary status from all user photos
-        await pool.query('UPDATE user_photos SET is_primary = FALSE WHERE user_id = $1', [userId]);
+        await supabase
+            .from('user_photos')
+            .update({ is_primary: false })
+            .eq('user_id', userId);
 
         // Set this photo as primary
-        await pool.query('UPDATE user_photos SET is_primary = TRUE WHERE id = $1', [photoId]);
+        await supabase
+            .from('user_photos')
+            .update({ is_primary: true })
+            .eq('id', photoId);
 
         res.json({ success: true, message: 'Ảnh đã được đặt làm ảnh chính' });
     } catch (error) {

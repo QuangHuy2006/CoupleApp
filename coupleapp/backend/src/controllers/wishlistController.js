@@ -4,16 +4,31 @@ const { getPool } = require('../config/database');
 const createWishlist = async (req, res) => {
     try {
         const { title, description } = req.body;
-        const pool = getPool();
+        const supabase = getPool();
         
-        const { rows: coupleRows } = await pool.query(
-            "SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'",
-            [req.user.id]
-        );
-        if (coupleRows.length === 0) return res.status(400).json({ success: false, message: 'Không tìm thấy cặp đôi' });
+        const { data: coupleRows, error: coupleError } = await supabase
+            .from('couple_pairs')
+            .select('id')
+            .or(`user1_id.eq.${req.user.id},user2_id.eq.${req.user.id}`)
+            .eq('status', 'active');
+            
+        if (coupleError) throw coupleError;
+        if (!coupleRows || coupleRows.length === 0) return res.status(400).json({ success: false, message: 'Không tìm thấy cặp đôi' });
+        
         const coupleId = coupleRows[0].id;
         const id = uuidv4();
-        await pool.query('INSERT INTO wishlists (id, couple_id, title, description) VALUES ($1, $2, $3, $4)', [id, coupleId, title, description]);
+        
+        const { error: insertError } = await supabase
+            .from('wishlists')
+            .insert([{
+                id,
+                couple_id: coupleId,
+                title,
+                description
+            }]);
+            
+        if (insertError) throw insertError;
+        
         res.status(201).json({ success: true, wishlist: { id, title, description, is_done: false, created_at: new Date() } });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -22,12 +37,28 @@ const createWishlist = async (req, res) => {
 
 const getWishlists = async (req, res) => {
     try {
-        const pool = getPool();
-        const { rows: coupleRows } = await pool.query("SELECT id FROM couple_pairs WHERE (user1_id = $1 OR user2_id = $1) AND status = 'active'", [req.user.id]);
-        if (coupleRows.length === 0) return res.status(400).json({ success: false, message: 'Không tìm thấy cặp đôi' });
+        const supabase = getPool();
+        
+        const { data: coupleRows, error: coupleError } = await supabase
+            .from('couple_pairs')
+            .select('id')
+            .or(`user1_id.eq.${req.user.id},user2_id.eq.${req.user.id}`)
+            .eq('status', 'active');
+            
+        if (coupleError) throw coupleError;
+        if (!coupleRows || coupleRows.length === 0) return res.status(400).json({ success: false, message: 'Không tìm thấy cặp đôi' });
+        
         const coupleId = coupleRows[0].id;
-        const { rows } = await pool.query('SELECT id, title, description, is_done, created_at FROM wishlists WHERE couple_id = $1 ORDER BY created_at DESC', [coupleId]);
-        res.json({ success: true, wishlists: rows });
+        
+        const { data: rows, error: selectError } = await supabase
+            .from('wishlists')
+            .select('id, title, description, is_done, created_at')
+            .eq('couple_id', coupleId)
+            .order('created_at', { ascending: false });
+            
+        if (selectError) throw selectError;
+        
+        res.json({ success: true, wishlists: rows || [] });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -37,8 +68,19 @@ const updateWishlist = async (req, res) => {
     try {
         const { id } = req.params;
         const { title, description, is_done } = req.body;
-        const pool = getPool();
-        await pool.query('UPDATE wishlists SET title = $1, description = $2, is_done = $3 WHERE id = $4', [title, description, !!is_done, id]);
+        const supabase = getPool();
+        
+        const { error: updateError } = await supabase
+            .from('wishlists')
+            .update({
+                title,
+                description,
+                is_done: !!is_done
+            })
+            .eq('id', id);
+            
+        if (updateError) throw updateError;
+        
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -48,8 +90,15 @@ const updateWishlist = async (req, res) => {
 const deleteWishlist = async (req, res) => {
     try {
         const { id } = req.params;
-        const pool = getPool();
-        await pool.query('DELETE FROM wishlists WHERE id = $1', [id]);
+        const supabase = getPool();
+        
+        const { error: deleteError } = await supabase
+            .from('wishlists')
+            .delete()
+            .eq('id', id);
+            
+        if (deleteError) throw deleteError;
+        
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

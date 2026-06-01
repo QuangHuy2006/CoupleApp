@@ -28,7 +28,7 @@ const updateLocation = async (req, res) => {
     try {
         const { latitude, longitude } = req.body;
         const userId = req.user.id;
-        const pool = getPool();
+        const supabase = getPool();
 
         // Validate coordinates
         if (typeof latitude !== 'number' || typeof longitude !== 'number') {
@@ -46,32 +46,44 @@ const updateLocation = async (req, res) => {
         }
 
         // Update current location in users table
-        await pool.query(
-            'UPDATE users SET latitude = $1, longitude = $2 WHERE id = $3',
-            [latitude, longitude, userId]
-        );
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ latitude, longitude })
+            .eq('id', userId);
+            
+        if (updateError) throw updateError;
 
-        // Save location history - upsert using ON CONFLICT
+        // Save location history
         const locationId = uuidv4();
-        await pool.query(
-            'INSERT INTO user_locations (id, user_id, latitude, longitude) VALUES ($1, $2, $3, $4)',
-            [locationId, userId, latitude, longitude]
-        );
+        const { error: insertError } = await supabase
+            .from('user_locations')
+            .insert([{
+                id: locationId,
+                user_id: userId,
+                latitude,
+                longitude
+            }]);
+            
+        if (insertError) throw insertError;
 
         // Get partner info if paired
         let partnerLocation = null;
-        const { rows: userRows } = await pool.query(
-            'SELECT is_paired, partner_id FROM users WHERE id = $1',
-            [userId]
-        );
+        const { data: userRows, error: userError } = await supabase
+            .from('users')
+            .select('is_paired, partner_id')
+            .eq('id', userId);
+            
+        if (userError) throw userError;
 
-        if (userRows[0].is_paired && userRows[0].partner_id) {
-            const { rows: partnerRows } = await pool.query(
-                'SELECT latitude, longitude FROM users WHERE id = $1',
-                [userRows[0].partner_id]
-            );
+        if (userRows && userRows.length > 0 && userRows[0].is_paired && userRows[0].partner_id) {
+            const { data: partnerRows, error: partnerError } = await supabase
+                .from('users')
+                .select('latitude, longitude')
+                .eq('id', userRows[0].partner_id);
 
-            if (partnerRows.length > 0 && partnerRows[0].latitude && partnerRows[0].longitude) {
+            if (partnerError) throw partnerError;
+
+            if (partnerRows && partnerRows.length > 0 && partnerRows[0].latitude && partnerRows[0].longitude) {
                 const distance = calculateDistance(
                     latitude, longitude,
                     partnerRows[0].latitude, partnerRows[0].longitude
@@ -109,15 +121,17 @@ const updateLocation = async (req, res) => {
 const getPartnerLocation = async (req, res) => {
     try {
         const userId = req.user.id;
-        const pool = getPool();
+        const supabase = getPool();
 
         // Get user's partner
-        const { rows: userRows } = await pool.query(
-            'SELECT is_paired, partner_id FROM users WHERE id = $1',
-            [userId]
-        );
+        const { data: userRows, error: userError } = await supabase
+            .from('users')
+            .select('is_paired, partner_id')
+            .eq('id', userId);
 
-        if (!userRows[0].is_paired || !userRows[0].partner_id) {
+        if (userError) throw userError;
+
+        if (!userRows || userRows.length === 0 || !userRows[0].is_paired || !userRows[0].partner_id) {
             return res.json({
                 success: true,
                 message: 'Bạn chưa kết đôi',
@@ -127,12 +141,14 @@ const getPartnerLocation = async (req, res) => {
 
         // Get partner location
         const partnerId = userRows[0].partner_id;
-        const { rows: partnerRows } = await pool.query(
-            'SELECT id, latitude, longitude FROM users WHERE id = $1',
-            [partnerId]
-        );
+        const { data: partnerRows, error: partnerError } = await supabase
+            .from('users')
+            .select('id, latitude, longitude')
+            .eq('id', partnerId);
 
-        if (partnerRows.length === 0 || !partnerRows[0].latitude || !partnerRows[0].longitude) {
+        if (partnerError) throw partnerError;
+
+        if (!partnerRows || partnerRows.length === 0 || !partnerRows[0].latitude || !partnerRows[0].longitude) {
             return res.json({
                 success: true,
                 message: 'Người yêu của bạn chưa chia sẻ vị trí',
@@ -141,10 +157,12 @@ const getPartnerLocation = async (req, res) => {
         }
 
         // Get current user location
-        const { rows: currentUserRows } = await pool.query(
-            'SELECT latitude, longitude FROM users WHERE id = $1',
-            [userId]
-        );
+        const { data: currentUserRows, error: currentError } = await supabase
+            .from('users')
+            .select('latitude, longitude')
+            .eq('id', userId);
+
+        if (currentError) throw currentError;
 
         const partner = partnerRows[0];
         const currentUser = currentUserRows[0];
@@ -164,10 +182,14 @@ const getPartnerLocation = async (req, res) => {
         }
 
         // Get last update time
-        const { rows: locationHistory } = await pool.query(
-            'SELECT updated_at FROM user_locations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1',
-            [partnerId]
-        );
+        const { data: locationHistory, error: historyError } = await supabase
+            .from('user_locations')
+            .select('updated_at')
+            .eq('user_id', partnerId)
+            .order('updated_at', { ascending: false })
+            .limit(1);
+
+        if (historyError) throw historyError;
 
         res.json({
             success: true,
@@ -176,7 +198,7 @@ const getPartnerLocation = async (req, res) => {
                 longitude: partner.longitude,
                 distance,
                 direction,
-                lastUpdate: locationHistory.length > 0 ? locationHistory[0].updated_at : null
+                lastUpdate: locationHistory && locationHistory.length > 0 ? locationHistory[0].updated_at : null
             }
         });
     } catch (error) {
@@ -188,17 +210,22 @@ const getLocationHistory = async (req, res) => {
     try {
         const userId = req.user.id;
         const { days = 7 } = req.query;
-        const pool = getPool();
+        const supabase = getPool();
+
+        // Calculate date limit
+        const limitDate = new Date();
+        limitDate.setDate(limitDate.getDate() - parseInt(days));
 
         // Get location history for specified days
-        const { rows: locations } = await pool.query(
-            `SELECT id, latitude, longitude, updated_at 
-             FROM user_locations 
-             WHERE user_id = $1 AND updated_at >= NOW() - INTERVAL '1 day' * $2
-             ORDER BY updated_at DESC
-             LIMIT 100`,
-            [userId, parseInt(days)]
-        );
+        const { data: locations, error } = await supabase
+            .from('user_locations')
+            .select('id, latitude, longitude, updated_at')
+            .eq('user_id', userId)
+            .gte('updated_at', limitDate.toISOString())
+            .order('updated_at', { ascending: false })
+            .limit(100);
+
+        if (error) throw error;
 
         res.json({
             success: true,
@@ -212,9 +239,14 @@ const getLocationHistory = async (req, res) => {
 const deleteLocationHistory = async (req, res) => {
     try {
         const userId = req.user.id;
-        const pool = getPool();
+        const supabase = getPool();
 
-        await pool.query('DELETE FROM user_locations WHERE user_id = $1', [userId]);
+        const { error } = await supabase
+            .from('user_locations')
+            .delete()
+            .eq('user_id', userId);
+
+        if (error) throw error;
 
         res.json({ success: true, message: 'Lịch sử vị trí đã được xóa' });
     } catch (error) {
